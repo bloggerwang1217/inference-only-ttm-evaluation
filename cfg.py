@@ -11,4 +11,7 @@ def cfg(noise_pred_uncond, noise_pred_cond, guidance_scale):
     Returns:
         tensor (1, C, L), the guided output passed to the scheduler.
     """
-    raise NotImplementedError("TODO: implement classifier-free guidance in cfg.py")
+
+    D_CFG = noise_pred_uncond + guidance_scale * (noise_pred_cond - noise_pred_uncond) 
+    
+    return D_CFG

@@ -1,0 +1,5 @@
+-r requirements.txt
+torchvision==0.26.0  # install from https://download.pytorch.org/whl/cu128
+--extra-index-url https://download.pytorch.org/whl/cpu
+torchcodec==0.11.1+cpu
+-e ./third_party/av-benchmark
