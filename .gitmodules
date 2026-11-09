@@ -2,3 +2,6 @@
 	path = third_party/av-benchmark
 	url = https://github.com/bloggerwang1217/av-benchmark.git
 	branch = hw3
+[submodule "third_party/MQAScore"]
+	path = third_party/MQAScore
+	url = https://github.com/Lonian6/MQAScore.git

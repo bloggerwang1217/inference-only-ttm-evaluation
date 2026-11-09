@@ -3,3 +3,4 @@ torchvision==0.26.0  # install from https://download.pytorch.org/whl/cu128
 --extra-index-url https://download.pytorch.org/whl/cpu
 torchcodec==0.11.1+cpu
 -e ./third_party/av-benchmark
+qwen-omni-utils==0.0.9  # MQAScore (third_party/MQAScore) reads audio for Qwen3-Omni with it
