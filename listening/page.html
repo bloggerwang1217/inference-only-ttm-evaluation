@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>Overall quality (OVL) listening test</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 860px; margin: 24px auto; padding: 0 16px; color: #222; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .note { color: #555; font-size: 14px; line-height: 1.6; }
+  .scale { font-size: 13px; color: #555; margin: 8px 0 16px; }
+  .item { display: grid; grid-template-columns: 32px 300px 1fr 130px; align-items: center; gap: 12px;
+          padding: 10px 0; border-bottom: 1px solid #e0e0e0; }
+  .letter { font-weight: bold; font-size: 18px; }
+  audio { width: 300px; }
+  input[type=range] { width: 100%; }
+  .value { font-variant-numeric: tabular-nums; font-size: 14px; }
+  .unrated { color: #b00; }
+  .played { color: #2a7; font-size: 12px; }
+  .nav { display: flex; gap: 12px; align-items: center; margin: 20px 0; }
+  button { font-size: 14px; padding: 6px 14px; }
+</style>
+</head>
+<body>
+<h1>Overall quality (OVL)</h1>
+<p class="note">只評音質，不考慮這段音樂和文字描述是否吻合（頁面上不顯示文字描述）。每一頁是同一句描述生成的幾個版本，順序已打亂。
+每段都可以重複播放、互相比較；一次只會播放一段。分數從 1 到 100，拖動滑桿後才算評過。每次評分都會自動存檔，不用另外下載。</p>
+<p class="scale">參考刻度（ITU-R BS.1534-3）：80–100 Excellent，60–80 Good，40–60 Fair，20–40 Poor，0–20 Bad。</p>
+<div class="nav">
+  <button id="prev">← 上一頁</button>
+  <span id="pageinfo"></span>
+  <button id="next">下一頁 →</button>
+  <span id="progress" class="note"></span>
+  <span id="saved" class="note"></span>
+  <button id="download" style="margin-left:auto">下載 CSV</button>
+</div>
+<div id="items"></div>
+<script>
+const PAGES = __PAGES__;
+const STORE = "ovl_ratings_v1";
+const ratings = JSON.parse(localStorage.getItem(STORE) || "{}");
+let current = 0;
+
+function csvText() {
+  const lines = ["page,caption_id,letter,score,played_full"];
+  for (const p of PAGES) for (const it of p.items) {
+    const r = ratings[keyOf(p.page, it.letter)] || {};
+    lines.push([p.page, p.caption_id, it.letter, r.score ?? "", r.played_full ? 1 : 0].join(","));
+  }
+  return lines.join("\n") + "\n";
+}
+// Ratings are kept in this browser and, when the page is served by listening/serve.py, also written to the server.
+function save() {
+  localStorage.setItem(STORE, JSON.stringify(ratings));
+  fetch("save", { method: "POST", body: csvText() })
+    .then(r => { document.getElementById("saved").textContent = r.ok ? "已存到伺服器" : "伺服器存檔失敗"; })
+    .catch(() => { document.getElementById("saved").textContent = "未連到伺服器，只存在瀏覽器"; });
+}
+function keyOf(page, letter) { return `p${String(page).padStart(2, "0")}_${letter}`; }
+function label(v) { return v >= 80 ? "Excellent" : v >= 60 ? "Good" : v >= 40 ? "Fair" : v >= 20 ? "Poor" : "Bad"; }
+
+function render() {
+  const p = PAGES[current];
+  document.getElementById("pageinfo").textContent = `第 ${current + 1} / ${PAGES.length} 頁`;
+  const box = document.getElementById("items");
+  box.innerHTML = "";
+  for (const it of p.items) {
+    const k = keyOf(p.page, it.letter);
+    const r = ratings[k] || {};
+    const row = document.createElement("div");
+    row.className = "item";
+    row.innerHTML = `<span class="letter">${it.letter}</span>
+      <audio controls preload="auto" src="${it.file}"></audio>
+      <input type="range" min="1" max="100" step="1" value="${r.score ?? 50}">
+      <span class="value"></span>`;
+    const audio = row.querySelector("audio"), slider = row.querySelector("input"), value = row.querySelector(".value");
+    const show = () => {
+      const rr = ratings[k] || {};
+      value.innerHTML = (rr.score === undefined ? `<span class="unrated">未評</span>` : `${rr.score}（${label(rr.score)}）`)
+        + (rr.played_full ? ` <span class="played">✓聽完</span>` : "");
+    };
+    audio.addEventListener("play", () => document.querySelectorAll("audio").forEach(a => { if (a !== audio) a.pause(); }));
+    audio.addEventListener("ended", () => { ratings[k] = { ...(ratings[k] || {}), played_full: true }; save(); show(); updateProgress(); });
+    slider.addEventListener("input", () => { ratings[k] = { ...(ratings[k] || {}), score: Number(slider.value) }; save(); show(); updateProgress(); });
+    show();
+    box.appendChild(row);
+  }
+  document.getElementById("prev").disabled = current === 0;
+  document.getElementById("next").disabled = current === PAGES.length - 1;
+  updateProgress();
+}
+
+function updateProgress() {
+  const total = PAGES.reduce((n, p) => n + p.items.length, 0);
+  const rated = PAGES.reduce((n, p) => n + p.items.filter(it => ratings[keyOf(p.page, it.letter)]?.score !== undefined).length, 0);
+  document.getElementById("progress").textContent = `已評 ${rated} / ${total} 段`;
+}
+
+document.getElementById("prev").onclick = () => { current--; render(); window.scrollTo(0, 0); };
+document.getElementById("next").onclick = () => { current++; render(); window.scrollTo(0, 0); };
+document.getElementById("download").onclick = () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csvText()], { type: "text/csv" }));
+  a.download = "ovl_ratings.csv";
+  a.click();
+};
+render();
+</script>
+</body>
+</html>
