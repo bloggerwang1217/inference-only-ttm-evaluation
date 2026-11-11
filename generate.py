@@ -1,10 +1,11 @@
 """Stable Audio Open sampling loop with the CFG step taken out of the pipeline.
 
 This mirrors `diffusers.StableAudioPipeline.__call__` (diffusers==0.41.0); the only difference is that
-the two model outputs of each step are combined by `cfg` from cfg.py.
+the two model outputs of each step are combined by `cfg` from cfg.py, or by APG from apg.py when `apg` is given.
 
     python generate.py --prompt "jazz, electric guitar, piano, relaxing" --out out.wav
     python generate.py --prompt "jazz, electric guitar, piano, relaxing" --check   # compare with diffusers
+    python generate.py --prompt "jazz, electric guitar, piano, relaxing" --apg --norm-threshold 0 --out apg.wav
 """
 
 import argparse
@@ -14,11 +15,12 @@ import torch
 from diffusers import StableAudioPipeline
 from diffusers.models.embeddings import get_1d_rotary_pos_embed
 
+from apg import APG
 from cfg import cfg
 
 
 @torch.no_grad()
-def generate(pipe, prompt, guidance_scale=7.0, num_inference_steps=100, audio_end_in_s=10.0, seed=0):
+def generate(pipe, prompt, guidance_scale=7.0, num_inference_steps=100, audio_end_in_s=10.0, seed=0, apg=None):
     device = pipe._execution_device
     sampling_rate = pipe.vae.config.sampling_rate
 
@@ -43,6 +45,8 @@ def generate(pipe, prompt, guidance_scale=7.0, num_inference_steps=100, audio_en
     )
 
     # 3. Denoising loop
+    if apg is not None:
+        apg.reset()
     for t in pipe.progress_bar(pipe.scheduler.timesteps):
         latent_model_input = pipe.scheduler.scale_model_input(torch.cat([latents] * 2), t)
         noise_pred = pipe.transformer(
@@ -53,12 +57,26 @@ def generate(pipe, prompt, guidance_scale=7.0, num_inference_steps=100, audio_en
             return_dict=False,
         )[0]
         noise_pred_uncond, noise_pred_cond = noise_pred.chunk(2)
-        noise_pred = cfg(noise_pred_uncond, noise_pred_cond, guidance_scale)  # <- your implementation
+        if apg is None:
+            noise_pred = cfg(noise_pred_uncond, noise_pred_cond, guidance_scale)  # <- your implementation
+        else:
+            noise_pred = apg(noise_pred_uncond, noise_pred_cond, guidance_scale, latents, pipe.scheduler)
         latents = pipe.scheduler.step(noise_pred, t, latents, **extra_step_kwargs).prev_sample
 
     # 4. Decode
     audio = pipe.vae.decode(latents).sample
     return audio[0, :, : int(audio_end_in_s * sampling_rate)]
+
+
+def add_apg_args(parser):
+    parser.add_argument("--apg", action="store_true", help="use APG (apg.py) instead of cfg.py")
+    parser.add_argument("--eta", type=float, default=0.0, help="APG weight of the parallel component")
+    parser.add_argument("--norm-threshold", type=float, default=0.0, help="APG cap r on the update norm; 0 = no cap")
+    parser.add_argument("--momentum", type=float, default=-0.75, help="APG momentum beta; 0 = no momentum")
+
+
+def make_apg(args):
+    return APG(args.eta, args.norm_threshold, args.momentum) if args.apg else None
 
 
 def main():
@@ -70,13 +88,19 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", default="out.wav")
     parser.add_argument("--check", action="store_true", help="compare with StableAudioPipeline")
+    add_apg_args(parser)
     args = parser.parse_args()
 
     pipe = StableAudioPipeline.from_pretrained("stabilityai/stable-audio-open-1.0", torch_dtype=torch.float16)
     pipe = pipe.to("cuda")
-    audio = generate(pipe, args.prompt, args.scale, args.steps, args.seconds, args.seed)
+    apg = make_apg(args)
+    audio = generate(pipe, args.prompt, args.scale, args.steps, args.seconds, args.seed, apg)
     sf.write(args.out, audio.T.float().cpu().numpy(), pipe.vae.config.sampling_rate)
     print(f"Saved to {args.out}")
+    if apg is not None:
+        before_cap = [n["before_cap"] for n in apg.norms]
+        print(f"APG norm before the cap over {len(before_cap)} steps: mean {sum(before_cap) / len(before_cap):.3f}, "
+              f"min {min(before_cap):.3f}, max {max(before_cap):.3f}")
 
     if args.check:
         ref = pipe(args.prompt, num_inference_steps=args.steps, audio_end_in_s=args.seconds,

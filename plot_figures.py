@@ -1,10 +1,13 @@
 """Draw the report figures for the guidance-scale sweep, the listening test and MQAScore from their summary CSVs.
 
 Reads outputs/sweep/summary.csv (summarize_sweep.py), outputs/listening/ovl/ovl_summary.csv (listening/analyze.py),
-outputs/mqascore/summary.csv (mqascore/summarize.py) and outputs/mqascore/summary_vs5.csv
-(mqascore/summarize.py --paired-with 5 --out outputs/mqascore/summary_vs5.csv).
+outputs/mqascore/summary_with_retrieved.csv (mqascore/summarize.py --runs 5=... 7=... 9=... retrieved=outputs/reference
+--out outputs/mqascore/summary_with_retrieved.csv) and outputs/mqascore/summary_vs5.csv
+(mqascore/summarize.py --paired-with 5 --out outputs/mqascore/summary_vs5.csv) and outputs/apg/summary.csv
+(summarize_apg.py). Figure 4 is an illustration with made-up 2-D values, not data.
 
-    python plot_figures.py            # writes outputs/figures/fig1a_sweep.png, fig1b_sweep_vs7.png, fig2_listening.png, fig3_mqascore.png, fig3b_mqascore_vs5.png
+    python plot_figures.py            # writes outputs/figures/fig1a_sweep.png, fig1b_sweep_vs7.png, fig2_listening.png, fig3_mqascore.png, fig3b_mqascore_vs5.png,
+                                      # fig4_cfg_vs_apg.png, fig5_apg_vs_cfg.png
 """
 import csv
 from pathlib import Path
@@ -121,18 +124,19 @@ a2.grid(axis="x", visible=False)
 fig.tight_layout()
 fig.savefig(OUT / "fig2_listening.png")
 
-# Figure 3: MQAScore by dimension, scales 5, 7 and 9 side by side
-mq = rows(REPO / "outputs/mqascore/summary.csv")
+# Figure 3: MQAScore by dimension, scales 5, 7 and 9 and the retrieved MusicCaps clips side by side
+mq = rows(REPO / "outputs/mqascore/summary_with_retrieved.csv")
 names = [("MQAScore", "All tags"), ("genre", "Genre"), ("instrument", "Instrument"),
          ("mood_theme", "Mood/theme"), ("context", "Context")]
 scales = [("5", "#2a78d6"), ("7", "#eb6834"), ("9", "#1baf7a")]  # categorical slots 1-3 of the reference palette
 fig, ax = plt.subplots(figsize=(13, 4.6))
-w = 0.26
-for j, (sc, col) in enumerate(scales):
+w = 0.2
+bars = [("retrieved", GRAY, "Retrieved")] + [(sc, col, f"Scale {sc}") for sc, col in scales]
+for j, (sc, col, lab) in enumerate(bars):
     for i, (key, _) in enumerate(names):
         r = next(r for r in mq if r["metric"] == key and r["guidance_scale"] == sc)
-        x, m = i + (j - 1) * w, float(r["mean"])
-        ax.bar(x, m, width=w - 0.03, color=col, zorder=2, label=f"Scale {sc}" if i == 0 else None)
+        x, m = i + (j - 1.5) * w, float(r["mean"])
+        ax.bar(x, m, width=w - 0.03, color=col, zorder=2, label=lab if i == 0 else None)
         ax.plot([x, x], [float(r["ci_low"]), min(float(r["ci_high"]), 1.0)], color=INK, lw=1.5, zorder=3)
         ax.text(x, 0.02, f"{m:.2f}", ha="center", va="bottom", color="white", fontsize=11, zorder=4, rotation=90)
 ax.set_xticks(range(len(names)))
@@ -140,7 +144,7 @@ ax.set_xticklabels([f"{lab} ({next(r for r in mq if r['metric']==k)['n_captions'
 ax.set_ylim(0, 1.05)
 ax.set_ylabel("P(Yes)")
 ax.grid(axis="x", visible=False)
-ax.legend(loc="upper left", ncol=3, fontsize=13, frameon=False, bbox_to_anchor=(0, 1.12))
+ax.legend(loc="upper left", ncol=4, fontsize=13, frameon=False, bbox_to_anchor=(0, 1.12))
 ax.set_title("Mean and 95% CI over the captions that have the dimension", color=INK2, fontsize=13, loc="right")
 fig.tight_layout()
 fig.savefig(OUT / "fig3_mqascore.png")
@@ -170,5 +174,91 @@ ax.legend(handles, ["Scale 7 − 5", "Scale 9 − 5", "filled: 95% CI excludes 0
           loc="lower right", fontsize=12, frameon=True, edgecolor=GRID, framealpha=1)
 fig.tight_layout()
 fig.savefig(OUT / "fig3b_mqascore_vs5.png")
+
+# Figure 4: CFG and APG side by side as vectors, an illustration with made-up 2-D values and w = 3
+CFG_C, APG_C = "#2a78d6", "#eb6834"  # categorical slots 1-2 of the reference palette
+dc, du, w = (3.0, 2.0), (2.3, 0.6), 3
+dd = (dc[0] - du[0], dc[1] - du[1])
+k = (dd[0] * dc[0] + dd[1] * dc[1]) / (dc[0] ** 2 + dc[1] ** 2)
+par = (k * dc[0], k * dc[1])
+perp = (dd[0] - par[0], dd[1] - par[1])
+fig, axes = plt.subplots(1, 2, figsize=(13, 5.4))
+
+
+def arrow(ax, p, q, color, lw=2.5, ls="-"):
+    ax.annotate("", xy=q, xytext=p, arrowprops=dict(arrowstyle="-|>", color=color, lw=lw, ls=ls,
+                                                    shrinkA=0, shrinkB=0, mutation_scale=18))
+
+
+for ax, title in zip(axes, ["CFG", "APG"]):
+    ax.plot([0, dc[0] * 1.75], [0, dc[1] * 1.75], ":", color=GRAY, lw=1.5, zorder=1)
+    ax.text(0.45, 0.4, "direction of $D_{cond}$", rotation=33.7, rotation_mode="anchor", ha="left", va="bottom",
+            color=INK2, fontsize=12)
+    for p, lab, off in [((0, 0), "origin", (-0.1, -0.35)), (du, "$D_{uncond}$", (0.12, -0.3)),
+                        (dc, "$D_{cond}$", (0.15, -0.15))]:
+        ax.plot(*p, "o", color=INK, ms=7, zorder=4)
+        ax.text(p[0] + off[0], p[1] + off[1], lab, color=INK, fontsize=14)
+    arrow(ax, du, dc, INK2, lw=2)
+    ax.text(du[0] + 0.45, du[1] + 0.55, "$\\Delta D$", color=INK2, fontsize=14, ha="left")
+    ax.set_aspect("equal")
+    ax.set_xlim(-0.4, 5.6)
+    ax.set_ylim(-0.6, 5.2)
+    ax.axis("off")
+    ax.set_title(title, color=INK, loc="left")
+a1, a2 = axes
+cfg_out = (du[0] + w * dd[0], du[1] + w * dd[1])
+arrow(a1, dc, cfg_out, CFG_C)
+a1.plot(*cfg_out, "o", color=CFG_C, ms=8, zorder=4)
+a1.text(cfg_out[0] + 0.15, cfg_out[1] - 0.1, "$D_{uncond} + w\\,\\Delta D$", color=INK, fontsize=14)
+foot = (dc[0] + par[0], dc[1] + par[1])
+arrow(a2, dc, foot, GRAY, lw=2, ls="--")
+a2.text(foot[0] + 0.15, foot[1] - 0.25, "$\\Delta D_{\\parallel}$", color=INK2, fontsize=14)
+apg_out = (dc[0] + (w - 1) * perp[0], dc[1] + (w - 1) * perp[1])
+arrow(a2, dc, apg_out, APG_C)
+a2.plot(*apg_out, "o", color=APG_C, ms=8, zorder=4)
+a2.text(apg_out[0] - 0.15, apg_out[1] + 0.15, "$D_{cond} + (w-1)\\,\\Delta D_{\\perp}$", color=INK, fontsize=14,
+        ha="center", va="bottom")
+fig.tight_layout()
+fig.savefig(OUT / "fig4_cfg_vs_apg.png")
+
+# Figure 5: APG and CFG at the scales where CFG distorts (9 to 13), with CFG at scale 5 as a reference line,
+# from summarize_apg.py
+ap = rows(REPO / "outputs/apg/summary.csv")
+ref = next(r for r in ap if r["guidance_scale"] == "5")
+hi_rows = [r for r in ap if int(r["guidance_scale"]) >= 9]
+xs = [int(r["guidance_scale"]) for r in hi_rows]
+fig, axes = plt.subplots(1, 4, figsize=(16, 4.6))
+panels = [("FD-VGG (lower is better)", "FD-VGG", False), ("KL-PaSST (lower is better)", "KL-PASST-softmax", True),
+          ("CLAP score (higher is better)", "LAION-CLAP-Score", True), ("Clipped clips, of 100", "clipped clips", False)]
+
+
+def value(r, key, lab):
+    v = r[f"{key} {lab}"]
+    return int(v.split("/")[0]) if key == "clipped clips" else float(v)
+
+
+for a, (title, key, has_ci) in zip(axes, panels):
+    a.axhline(value(ref, key, "CFG"), color=CFG_C, ls="--", lw=1.5, zorder=1)
+    for j, (lab, col) in enumerate((("CFG", CFG_C), ("APG", APG_C))):
+        off = -0.15 if j == 0 else 0.15
+        if has_ci:
+            for r, x in zip(hi_rows, xs):
+                a.plot([x + off, x + off], [float(r[f"{key} {lab} CI low"]), float(r[f"{key} {lab} CI high"])],
+                       color=col, lw=2, solid_capstyle="round", zorder=2)
+        a.plot([x + off for x in xs], [value(r, key, lab) for r in hi_rows], "-o", color=col, ms=8, mec="white",
+               mew=1.5, lw=1.5, zorder=3, label=f"{lab} at the scale")
+    a.set_title(title, color=INK, loc="left")
+    a.set_xticks(xs)
+    a.set_xlim(8, 14)
+    a.grid(axis="x", visible=False)
+    a.set_xlabel("Guidance scale")
+axes[3].set_ylim(0, 70)
+handles = [Line2D([], [], color=CFG_C, lw=1.5, marker="o", ms=8, mec="white"),
+           Line2D([], [], color=APG_C, lw=1.5, marker="o", ms=8, mec="white"),
+           Line2D([], [], color=CFG_C, lw=1.5, ls="--")]
+axes[3].legend(handles, ["CFG", "APG", "CFG at scale 5"], loc="lower right", fontsize=12, frameon=True,
+               edgecolor=GRID, framealpha=1)
+fig.tight_layout()
+fig.savefig(OUT / "fig5_apg_vs_cfg.png")
 
 print("done")
